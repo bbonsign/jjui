@@ -9,6 +9,9 @@ type Commit struct {
 	IsWorkingCopy bool
 	Hidden        bool
 	CommitId      string
+	// Parents holds the shortest-prefix change IDs of this commit's parents,
+	// as embedded by the log template. Empty for the root commit.
+	Parents []string
 }
 
 func (c Commit) IsRoot() bool {

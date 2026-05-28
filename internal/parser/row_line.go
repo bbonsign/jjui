@@ -24,7 +24,7 @@ func NewGraphRowLine(segments []*screen.Segment) GraphRowLine {
 	}
 }
 
-func (gr *GraphRowLine) ParseRowPrefixes() (int, string, string) {
+func (gr *GraphRowLine) ParseRowPrefixes() (int, string, string, []string) {
 	prefixesIdx := -1
 	for i, segment := range gr.Segments {
 		if strings.Contains(segment.Text, jj.JJUIPrefix) {
@@ -34,21 +34,35 @@ func (gr *GraphRowLine) ParseRowPrefixes() (int, string, string) {
 	}
 
 	if prefixesIdx == -1 {
-		return -1, "", ""
+		return -1, "", "", nil
 	}
 	prefixParts := strings.Split(gr.Segments[prefixesIdx].Text, jj.JJUIPrefix)
-	if len(prefixParts) != 3 {
-		return -1, "", ""
+	if len(prefixParts) < 3 {
+		return -1, "", "", nil
 	}
 	beforePrefix := prefixParts[0]
 	changeID := strings.TrimSpace(prefixParts[1])
 	commitID := strings.TrimSpace(prefixParts[2])
 
-	// Remove changeID and commitID prefixes, while keeping everything before the
-	// prefixes.
+	var parents []string
+	if len(prefixParts) >= 4 {
+		raw := strings.TrimSpace(prefixParts[3])
+		if raw != "" {
+			parts := strings.Split(raw, ",")
+			parents = make([]string, 0, len(parts))
+			for _, p := range parts {
+				if p = strings.TrimSpace(p); p != "" {
+					parents = append(parents, p)
+				}
+			}
+		}
+	}
+
+	// Remove changeID, commitID, and parents prefixes, while keeping everything
+	// before the prefixes.
 	gr.Segments[prefixesIdx] = &screen.Segment{Text: beforePrefix}
 
-	return prefixesIdx + 1, changeID, commitID
+	return prefixesIdx + 1, changeID, commitID, parents
 }
 
 func (gr *GraphRowLine) chop(indent int) {
