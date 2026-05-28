@@ -75,6 +75,7 @@ type Model struct {
 	requestInFlight        bool
 	checkedRevisions       map[string]appContext.SelectedRevision
 	focused                bool
+	tracerDisabled         bool
 }
 
 type revisionReloadState struct {
@@ -790,6 +791,9 @@ func (m *Model) HandleIntent(intent intents.Intent) (tea.Cmd, bool) {
 		item := appContext.SelectedRevision{ChangeId: changeId, CommitId: commit.CommitId}
 		m.toggleCheckedRevision(item)
 		return nil, true
+	case intents.TracerToggle:
+		m.tracerDisabled = !m.tracerDisabled
+		return nil, true
 	case intents.Navigate:
 		return m.navigate(intent), true
 	case intents.GoToTop:
@@ -1283,6 +1287,14 @@ func (m *Model) ViewRect(dl *render.DisplayContext, box layout.Box) {
 	m.displayContextRenderer.SetSelections(m.checkedRevisionMap())
 	m.displayContextRenderer.SetSelectionFocused(m.focused)
 
+	// Build the lane tracer for this frame and hand it to the renderer.
+	// Tracing across all rows is cheap for typical log_batch_size (default 50).
+	if m.tracerDisabled {
+		m.displayContextRenderer.SetTracer(parser.NoopTracer{})
+	} else {
+		m.displayContextRenderer.SetTracer(parser.NewTracer(m.rows, m.cursor, 0, len(m.rows)))
+	}
+
 	renderOp := m.baseOperation()
 
 	// Find SegmentRenderer from the top of the stack (e.g. ace_jump)
@@ -1446,6 +1458,7 @@ func New(c *appContext.MainContext) *Model {
 		cursor:           0,
 		checkedRevisions: make(map[string]appContext.SelectedRevision),
 		focused:          true,
+		tracerDisabled:   config.Current.Revisions.Tracer.Disabled,
 	}
 	m.displayContextRenderer = NewDisplayContextRenderer()
 	return &m

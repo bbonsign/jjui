@@ -26,6 +26,8 @@ bindings_profile = ":builtin"
   log_batch_size = 50
   # template = 'builtin_log_compact' # overrides jj's templates.log
   # revset = "zzzzzzz"               # overrides jj's revsets.log
+  [revisions.tracer]
+    disabled = false
 
 [preview]
   revision_command = ["show", "--color", "always", "-r", "$change_id"]

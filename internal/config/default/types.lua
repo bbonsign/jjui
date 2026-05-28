@@ -335,6 +335,7 @@ function wait_refresh() end
 ---@field split fun()
 ---@field split_parallel fun()
 ---@field toggle_select fun()
+---@field tracer_toggle fun()
 ---@field close fun()
 
 ---@class jjui.revisions.abandon

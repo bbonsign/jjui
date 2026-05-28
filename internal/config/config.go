@@ -232,11 +232,16 @@ func (m *WindowTitleMode) UnmarshalTOML(data any) error {
 	return nil
 }
 
+type TracerConfig struct {
+	Disabled bool `toml:"disabled"`
+}
+
 type RevisionsConfig struct {
-	LogBatching  bool   `toml:"log_batching"`
-	LogBatchSize int    `toml:"log_batch_size"`
-	Template     string `toml:"template"`
-	Revset       string `toml:"revset"`
+	LogBatching  bool         `toml:"log_batching"`
+	LogBatchSize int          `toml:"log_batch_size"`
+	Template     string       `toml:"template"`
+	Revset       string       `toml:"revset"`
+	Tracer       TracerConfig `toml:"tracer"`
 }
 
 type PreviewPosition int

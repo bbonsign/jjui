@@ -478,6 +478,8 @@ func ResolveIntent(scope string, action keybindings.Action, args map[string]any)
 			return intents.StartSplit{IsParallel: true}, true
 		case keybindings.Action("revisions.toggle_select"):
 			return intents.RevisionsToggleSelect{}, true
+		case keybindings.Action("revisions.tracer_toggle"):
+			return intents.TracerToggle{}, true
 		}
 	case ScopeAbandon:
 		switch action {
