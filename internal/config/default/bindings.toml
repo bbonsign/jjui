@@ -85,6 +85,7 @@ bindings = [
     { key = "shift+w", action = "ui.open_command_history", scope = "revisions", desc = "command history" },
     { key = "shift+p", action = "ui.preview_toggle_bottom", scope = "revisions", desc = "move preview to bottom" },
     { key = "tab", action = "ui.focus_next_pane", scope = "revisions", desc = "next pane" },
+    { key = "t", action = "revisions.tracer_toggle", scope = "revisions", desc = "toggle lane tracing" },
     { key = "esc", action = "revisions.cancel", scope = "revisions", desc = "clear selection" },
 
     # revisions.quick_search

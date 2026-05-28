@@ -318,6 +318,7 @@ var builtInActionScopes = map[string][]string{
 	"revisions.target_picker.move_down":             {"revisions.target_picker"},
 	"revisions.target_picker.move_up":               {"revisions.target_picker"},
 	"revisions.toggle_select":                       {"revisions"},
+	"revisions.tracer_toggle":                       {"revisions"},
 	"revset.apply":                                  {"revset"},
 	"revset.autocomplete":                           {"revset"},
 	"revset.autocomplete_back":                      {"revset"},
