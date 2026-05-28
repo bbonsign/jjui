@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/idursun/jjui/internal/jj"
@@ -17,9 +18,12 @@ func makeGutterSegments(chars string) []*screen.Segment {
 	return segments
 }
 
-func makeRow(gutterLines []string) Row {
+// makeRow builds a synthetic row with the given gutter lines and an
+// auto-assigned change ID. Parents must be wired separately via
+// linkLinear / linkParents.
+func makeRow(id string, gutterLines []string) Row {
 	row := Row{
-		Commit: &jj.Commit{ChangeId: "test"},
+		Commit: &jj.Commit{ChangeId: id},
 		Lines:  make([]*GraphRowLine, len(gutterLines)),
 	}
 	for i, g := range gutterLines {
@@ -35,6 +39,18 @@ func makeRow(gutterLines []string) Row {
 	return row
 }
 
+// linkLinear sets each row's parent to the next row's change ID (the
+// jj convention of "newer commits on top, parents below").
+func linkLinear(rows []Row) {
+	for i := range rows {
+		if i+1 < len(rows) && rows[i+1].Commit != nil {
+			rows[i].Commit.Parents = []string{rows[i+1].Commit.ChangeId}
+		}
+	}
+}
+
+func id(n int) string { return "c" + strconv.Itoa(n) }
+
 func TestNoopTracerAlwaysInLane(t *testing.T) {
 	noop := NoopTracer{}
 	assert.True(t, noop.IsInSameLane(0))
@@ -45,22 +61,17 @@ func TestNoopTracerAlwaysInLane(t *testing.T) {
 
 func TestTracerEmptyRows(t *testing.T) {
 	tracer := NewTracer(nil, 0, 0, 0)
-	// NoopTracer is returned for an invalid cursor.
 	assert.True(t, tracer.IsInSameLane(0))
 }
 
 func TestTracerCursorAtTopVisitsAllAncestors(t *testing.T) {
-	// Linear chain. Cursor at top sees every ancestor below.
-	// ○   (row 0, cursor)
-	// │
-	// ○   (row 1)
-	// │
-	// ○   (row 2)
+	// Linear chain. Cursor at top, every row is an ancestor.
 	rows := []Row{
-		makeRow([]string{"○", "│"}),
-		makeRow([]string{"○", "│"}),
-		makeRow([]string{"○"}),
+		makeRow(id(0), []string{"○", "│"}),
+		makeRow(id(1), []string{"○", "│"}),
+		makeRow(id(2), []string{"○"}),
 	}
+	linkLinear(rows)
 
 	tracer := NewTracer(rows, 0, 0, len(rows))
 	assert.True(t, tracer.IsInSameLane(0))
@@ -69,122 +80,96 @@ func TestTracerCursorAtTopVisitsAllAncestors(t *testing.T) {
 }
 
 func TestTracerCursorAtBottomExcludesDescendants(t *testing.T) {
-	// Same linear chain, but cursor at the bottom: nothing above is an
-	// ancestor, so only the cursor row is in lane.
+	// Cursor at bottom of linear chain; nothing above is an ancestor.
 	rows := []Row{
-		makeRow([]string{"○", "│"}),
-		makeRow([]string{"○", "│"}),
-		makeRow([]string{"○"}),
+		makeRow(id(0), []string{"○", "│"}),
+		makeRow(id(1), []string{"○", "│"}),
+		makeRow(id(2), []string{"○"}),
 	}
+	linkLinear(rows)
 
 	tracer := NewTracer(rows, 2, 0, len(rows))
-	assert.False(t, tracer.IsInSameLane(0), "descendants should be off-lane")
-	assert.False(t, tracer.IsInSameLane(1), "descendants should be off-lane")
-	assert.True(t, tracer.IsInSameLane(2), "cursor row itself is in lane")
+	assert.False(t, tracer.IsInSameLane(0), "descendant off-lane")
+	assert.False(t, tracer.IsInSameLane(1), "descendant off-lane")
+	assert.True(t, tracer.IsInSameLane(2), "cursor in lane")
 }
 
-func TestTracerCursorInMiddleExcludesDescendants(t *testing.T) {
-	// Linear chain. Cursor in the middle: only the cursor and ancestors
-	// (rows below) are in lane.
+func TestTracerSiblingsOnSameColumnAreNotInLane(t *testing.T) {
+	// Two unrelated commits A and B both rendered at col 0 (jj reuses the
+	// column). They are NOT ancestors of each other. Selecting A must not
+	// mark B as in-lane just because the visual gutter has a │ between them.
 	rows := []Row{
-		makeRow([]string{"○", "│"}),
-		makeRow([]string{"○", "│"}),
-		makeRow([]string{"○", "│"}),
-		makeRow([]string{"○"}),
+		makeRow("a", []string{"○"}),
+		makeRow("b", []string{"○"}),
 	}
+	// No parents set — A and B are unrelated.
 
-	tracer := NewTracer(rows, 2, 0, len(rows))
-	assert.False(t, tracer.IsInSameLane(0), "descendant should be off-lane")
-	assert.False(t, tracer.IsInSameLane(1), "descendant should be off-lane")
-	assert.True(t, tracer.IsInSameLane(2), "cursor row is in lane")
-	assert.True(t, tracer.IsInSameLane(3), "ancestor should be in lane")
-}
-
-func TestTracerParallelLanes(t *testing.T) {
-	// Two parallel lanes that never touch.
-	// ○   (row 0, col 0)
-	// │ ○ (row 1, col 0 pipe, col 2 node)
-	// │ │
-	// ○ │ (row 2, col 0 node, col 2 pipe)
-	// │ │
-	rows := []Row{
-		makeRow([]string{"○  ", "│  "}),
-		makeRow([]string{"│ ○", "│ │"}),
-		makeRow([]string{"○ │", "│ │"}),
-	}
-
-	// Cursor on row 1 (right lane): nothing else is on that lane downward.
-	tracer := NewTracer(rows, 1, 0, len(rows))
-	assert.False(t, tracer.IsInSameLane(0))
-	assert.True(t, tracer.IsInSameLane(1))
-	assert.False(t, tracer.IsInSameLane(2))
-
-	// Cursor on row 0 (left lane, top): row 2 is an ancestor on the same lane.
-	tracer2 := NewTracer(rows, 0, 0, len(rows))
-	assert.True(t, tracer2.IsInSameLane(0))
-	assert.False(t, tracer2.IsInSameLane(1), "right lane is unrelated")
-	assert.True(t, tracer2.IsInSameLane(2), "left lane ancestor is in lane")
-}
-
-func TestTracerGutterInLane(t *testing.T) {
-	// Two parallel lanes.
-	rows := []Row{
-		makeRow([]string{"○  ", "│  "}),
-		makeRow([]string{"│ ○", "│ │"}),
-		makeRow([]string{"○ │"}),
-	}
-
-	// Cursor on row 0 — left lane (col 0) is in lane, right lane (col 2) is not.
 	tracer := NewTracer(rows, 0, 0, len(rows))
-	assert.True(t, tracer.IsGutterInLane(1, 0, 0))  // │ at col 0 is in lane
-	assert.False(t, tracer.IsGutterInLane(1, 0, 2)) // ○ at col 2 is NOT in lane
+	assert.True(t, tracer.IsInSameLane(0), "cursor")
+	assert.False(t, tracer.IsInSameLane(1), "unrelated commit must not be in lane")
 }
 
-func TestTracerForkDoesNotLeakIntoSideBranch(t *testing.T) {
-	// Graph with a fork going off to the right (├─╮):
-	// ○     (row 0, col 0: top, cursor)
+func TestTracerSiblingsAlongVisualPipeAreNotInLane(t *testing.T) {
+	// More realistic case: cursor A at col 0, unrelated commit B further
+	// down at col 0 with a │ between them. The gutter BFS could naively
+	// flood through the │ and mark B's row, but the commit graph tells us
+	// they're unrelated.
+	rows := []Row{
+		makeRow("a", []string{"○", "│"}),
+		makeRow("b", []string{"○", "│"}),
+		makeRow("c", []string{"○"}),
+	}
+	// A has no parents; B has parent C.
+	rows[1].Commit.Parents = []string{"c"}
+
+	tracer := NewTracer(rows, 0, 0, len(rows))
+	assert.True(t, tracer.IsInSameLane(0), "cursor A")
+	assert.False(t, tracer.IsInSameLane(1), "B is unrelated to A")
+	assert.False(t, tracer.IsInSameLane(2), "C is B's parent, not A's")
+}
+
+func TestTracerSideBranchExcluded(t *testing.T) {
+	// Cursor on the main column. A side commit hangs off via a fork but is
+	// not a parent — only the main chain is in-lane.
+	//
+	// ○ A         (cursor)
 	// │
-	// ○     (row 1, col 0)
+	// ○ B
 	// ├─╮
-	// │ ○   (row 2, col 0: pipe, col 2: side branch node)
-	// │ │
-	// ○ │   (row 3, col 0)
-	// │
-	// ○     (row 4, col 0: bottom)
+	// │ ○ S       (side, not B's parent — B's parent is C below)
+	// ○ C
 	rows := []Row{
-		makeRow([]string{"○  ", "│  "}),
-		makeRow([]string{"○  ", "├─╮"}),
-		makeRow([]string{"│ ○", "│ │"}),
-		makeRow([]string{"○ │", "│  "}),
-		makeRow([]string{"○  "}),
+		makeRow("a", []string{"○  ", "│  "}),
+		makeRow("b", []string{"○  ", "├─╮"}),
+		makeRow("s", []string{"│ ○"}),
+		makeRow("c", []string{"○  "}),
 	}
+	rows[0].Commit.Parents = []string{"b"}
+	rows[1].Commit.Parents = []string{"c"} // B's only parent is C; S is unrelated.
+	// S and C have no parents listed.
 
-	// Cursor at the top: traces down through the main column and ALSO
-	// follows the side branch through ├─╮ to the right node.
 	tracer := NewTracer(rows, 0, 0, len(rows))
-	assert.True(t, tracer.IsInSameLane(0), "cursor row")
-	assert.True(t, tracer.IsInSameLane(1), "main column ancestor")
-	assert.True(t, tracer.IsInSameLane(2), "side branch reachable through fork")
-	assert.True(t, tracer.IsInSameLane(3), "main column ancestor")
-	assert.True(t, tracer.IsInSameLane(4), "main column ancestor")
+	assert.True(t, tracer.IsInSameLane(0), "cursor A")
+	assert.True(t, tracer.IsInSameLane(1), "B is parent of A")
+	assert.False(t, tracer.IsInSameLane(2), "S is NOT an ancestor of A")
+	assert.True(t, tracer.IsInSameLane(3), "C is parent of B")
 }
 
-func TestTracerCursorOnSideBranchExcludesMainColumn(t *testing.T) {
-	// Same graph as above. Cursor on the side branch should NOT highlight
-	// the main column rows because going down from the side node doesn't
-	// reach them.
+func TestTracerMergeWithSideParentIncluded(t *testing.T) {
+	// Same shape, but B is a merge: parents are S and C. Both branches
+	// should be in lane.
 	rows := []Row{
-		makeRow([]string{"○  ", "│  "}),
-		makeRow([]string{"○  ", "├─╮"}),
-		makeRow([]string{"│ ○", "│ │"}),
-		makeRow([]string{"○ │", "│  "}),
-		makeRow([]string{"○  "}),
+		makeRow("a", []string{"○  ", "│  "}),
+		makeRow("b", []string{"○  ", "├─╮"}),
+		makeRow("s", []string{"│ ○"}),
+		makeRow("c", []string{"○  "}),
 	}
+	rows[0].Commit.Parents = []string{"b"}
+	rows[1].Commit.Parents = []string{"c", "s"} // merge
 
-	tracer := NewTracer(rows, 2, 0, len(rows))
-	assert.False(t, tracer.IsInSameLane(0), "row above cursor is descendant")
-	assert.False(t, tracer.IsInSameLane(1), "row above cursor is descendant")
-	assert.True(t, tracer.IsInSameLane(2), "cursor row")
-	assert.False(t, tracer.IsInSameLane(3), "main column not reachable from side")
-	assert.False(t, tracer.IsInSameLane(4), "main column not reachable from side")
+	tracer := NewTracer(rows, 0, 0, len(rows))
+	assert.True(t, tracer.IsInSameLane(0))
+	assert.True(t, tracer.IsInSameLane(1))
+	assert.True(t, tracer.IsInSameLane(2), "S is a parent of B")
+	assert.True(t, tracer.IsInSameLane(3))
 }
