@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# Prepares an Amp orb for jjui development: Go, jj, go-task, Go module and
+# build caches, and the native libghostty-vt build that the E2E suite links
+# against (mirroring e2e/Dockerfile so E2E tests run without Docker).
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+GO_VERSION=1.27.0
+JJ_VERSION=0.44.0
+TASK_VERSION=3.54.0
+ZIG_VERSION=0.16.0
+GHOSTTY_COMMIT=2dd79f3bc6af649e68422b08e21ad0300fd8b391
+LIBGHOSTTY_PREFIX=/opt/libghostty-vt
+
+case "$(uname -m)" in
+  x86_64) go_arch=amd64 native_arch=x86_64 ;;
+  aarch64) go_arch=arm64 native_arch=aarch64 ;;
+  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+step() {
+  local name="$1"; shift
+  local start=$SECONDS
+  echo "==> $name"
+  "$@"
+  echo "<== $name ($((SECONDS - start))s)"
+}
+
+install_system_packages() {
+  local missing=()
+  for pkg in ca-certificates curl git pkg-config xz-utils build-essential; do
+    dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    sudo apt-get update
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+  fi
+}
+
+install_go() {
+  if [ "$(/usr/local/go/bin/go env GOVERSION 2>/dev/null || true)" != "go$GO_VERSION" ]; then
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz" -o /tmp/go.tar.gz
+    sudo rm -rf /usr/local/go
+    sudo tar -C /usr/local -xzf /tmp/go.tar.gz
+    rm -f /tmp/go.tar.gz
+  fi
+  sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go
+  sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+}
+
+install_jj() {
+  if ! jj --version 2>/dev/null | grep -q "^jj ${JJ_VERSION}"; then
+    local tmp
+    tmp="$(mktemp -d)"
+    curl -fsSL "https://github.com/jj-vcs/jj/releases/download/v${JJ_VERSION}/jj-v${JJ_VERSION}-${native_arch}-unknown-linux-musl.tar.gz" \
+      | tar -xz -C "$tmp"
+    sudo install "$tmp/jj" /usr/local/bin/jj
+    rm -rf "$tmp"
+  fi
+}
+
+install_task() {
+  if ! task --version 2>/dev/null | grep -q "$TASK_VERSION"; then
+    local tmp
+    tmp="$(mktemp -d)"
+    curl -fsSL "https://github.com/go-task/task/releases/download/v${TASK_VERSION}/task_linux_${go_arch}.tar.gz" \
+      | tar -xz -C "$tmp" task
+    sudo install "$tmp/task" /usr/local/bin/task
+    rm -rf "$tmp"
+  fi
+}
+
+install_zig() {
+  local dir="/opt/zig-${native_arch}-linux-${ZIG_VERSION}"
+  if [ ! -x "$dir/zig" ]; then
+    curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${native_arch}-linux-${ZIG_VERSION}.tar.xz" \
+      | sudo tar -xJ -C /opt
+  fi
+  sudo ln -sfn "$dir/zig" /usr/local/bin/zig
+}
+
+build_libghostty() {
+  local marker="$LIBGHOSTTY_PREFIX/.ghostty-commit"
+  if [ "$(cat "$marker" 2>/dev/null || true)" = "$GHOSTTY_COMMIT-zig-$ZIG_VERSION" ]; then
+    return
+  fi
+  # Zig's DNS resolver rejects a resolv.conf without a trailing newline, which
+  # is how orbs ship it; without this fix it cannot fetch Ghostty's dependencies.
+  if [ -s /etc/resolv.conf ] && [ -n "$(tail -c1 /etc/resolv.conf)" ]; then
+    echo | sudo tee -a /etc/resolv.conf >/dev/null
+  fi
+  local src=/opt/ghostty
+  sudo mkdir -p "$src" "$LIBGHOSTTY_PREFIX"
+  sudo chown "$(id -u):$(id -g)" "$src" "$LIBGHOSTTY_PREFIX"
+  if [ ! -d "$src/.git" ]; then
+    git init -q "$src"
+    git -C "$src" remote add origin https://github.com/ghostty-org/ghostty.git
+  fi
+  if [ "$(git -C "$src" rev-parse HEAD 2>/dev/null || true)" != "$GHOSTTY_COMMIT" ]; then
+    git -C "$src" fetch -q --depth 1 origin "$GHOSTTY_COMMIT"
+    git -C "$src" checkout -q --detach FETCH_HEAD
+  fi
+  (cd "$src" && zig build -Demit-lib-vt --prefix "$LIBGHOSTTY_PREFIX")
+  echo "$GHOSTTY_COMMIT-zig-$ZIG_VERSION" > "$marker"
+}
+
+configure_profile() {
+  local marker="# jjui orb development environment"
+  if ! grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null; then
+    cat >> "$HOME/.bash_profile" <<EOF
+
+$marker
+export PKG_CONFIG_PATH="$LIBGHOSTTY_PREFIX/share/pkgconfig\${PKG_CONFIG_PATH:+:\$PKG_CONFIG_PATH}"
+case ":\$PATH:" in *":\$HOME/go/bin:"*) ;; *) export PATH="\$PATH:\$HOME/go/bin" ;; esac
+EOF
+  fi
+}
+
+warm_go_caches() {
+  go mod download
+  go -C e2e mod download
+  go build ./...
+  # Compile (and vet) all test binaries without running any tests.
+  go test -count=1 -run '^$' ./... >/dev/null
+  PKG_CONFIG_PATH="$LIBGHOSTTY_PREFIX/share/pkgconfig" CGO_ENABLED=1 \
+    go -C e2e test -tags=e2e -count=1 -run '^$' ./... >/dev/null
+}
+
+write_agent_guidance() {
+  local file="$HOME/.config/amp/AGENTS.md"
+  local marker="# jjui orb notes"
+  mkdir -p "$(dirname "$file")"
+  if ! grep -Fqx "$marker" "$file" 2>/dev/null; then
+    cat >> "$file" <<'EOF'
+
+# jjui orb notes
+
+- `.agents/setup` installs Go, `jj`, `task`, Zig, and a native libghostty-vt build in `/opt/libghostty-vt`.
+- Docker is not running in orbs, so `task test:e2e` and `task check` (which calls it) do not work. Run the E2E suite natively instead:
+  `go build -o /tmp/jjui ./cmd/jjui && JJUI_BIN=/tmp/jjui go -C e2e test -tags=e2e -count=1 -parallel=4 ./...`
+  (add `-run TestName` for one test). `PKG_CONFIG_PATH` for libghostty is exported by `~/.bash_profile`.
+  The `missing .note.GNU-stack` linker warning is harmless.
+- `nix` is not installed; `nix run .#update-vendor-hash` cannot run in an orb.
+EOF
+  fi
+}
+
+step "system packages" install_system_packages
+step "go $GO_VERSION" install_go
+step "jj $JJ_VERSION" install_jj
+step "task $TASK_VERSION" install_task
+step "zig $ZIG_VERSION" install_zig
+step "libghostty-vt" build_libghostty
+step "shell profile" configure_profile
+step "go caches" warm_go_caches
+step "agent guidance" write_agent_guidance
