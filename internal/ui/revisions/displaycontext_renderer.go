@@ -17,6 +17,7 @@ import (
 type DisplayContextRenderer struct {
 	listRenderer   *render.ListRenderer
 	selections     map[string]bool
+	tracer         parser.LaneTracer
 	textStyle      lipgloss.Style
 	dimmedStyle    lipgloss.Style
 	selectedStyle  lipgloss.Style
@@ -29,6 +30,7 @@ type itemRenderer struct {
 	renderer        *DisplayContextRenderer
 	dl              *render.DisplayContext
 	row             parser.Row
+	rowIndex        int
 	isHighlighted   bool
 	op              operations.Operation
 	segmentRenderer operations.SegmentRenderer
@@ -103,6 +105,12 @@ func (r *DisplayContextRenderer) SetSelectionFocused(focused bool) {
 	r.selectionFocus = focused
 }
 
+// SetTracer installs a lane tracer used to dim off-lane rows and gutter
+// cells. Pass nil (or NoopTracer{}) to disable dimming.
+func (r *DisplayContextRenderer) SetTracer(t parser.LaneTracer) {
+	r.tracer = t
+}
+
 // Render renders the revisions list to a DisplayContext
 func (r *DisplayContextRenderer) Render(
 	dl *render.DisplayContext,
@@ -132,7 +140,15 @@ func (r *DisplayContextRenderer) Render(
 		isSelected := index == cursor && r.selectionFocus
 
 		// Render the item content
-		r.renderItemToDisplayContext(dl, item, rect, isSelected, operation, segmentRenderer, quickSearch)
+		r.renderItemToDisplayContext(dl, item, index, rect, isSelected, operation, segmentRenderer, quickSearch)
+
+		// Dim off-lane rows. Only dim the content area (past the gutter), so
+		// gutter cells that the tracer marked as in-lane (e.g. the trunk │
+		// passing through a side-branch commit's row) keep their normal color.
+		if r.tracer != nil && !isSelected && !r.tracer.IsInSameLane(index) {
+			contentRect, _, _ := r.itemContentRect(item, rect, rect.Min.Y)
+			dl.AddDim(contentRect, 0)
+		}
 	}
 
 	// Click message factory
@@ -261,6 +277,7 @@ func (r *DisplayContextRenderer) calculateItemHeight(
 func (r *DisplayContextRenderer) renderItemToDisplayContext(
 	dl *render.DisplayContext,
 	item parser.Row,
+	rowIndex int,
 	rect layout.Rectangle,
 	isSelected bool,
 	operation operations.Operation,
@@ -274,6 +291,7 @@ func (r *DisplayContextRenderer) renderItemToDisplayContext(
 		renderer:        r,
 		dl:              dl,
 		row:             item,
+		rowIndex:        rowIndex,
 		isHighlighted:   isSelected,
 		op:              operation,
 		segmentRenderer: segmentRenderer,
@@ -420,7 +438,7 @@ func (r *DisplayContextRenderer) renderItemToDisplayContext(
 			dl.AddHighlight(lineRect, r.selectedStyle, 1)
 		}
 		tb := dl.Text(lineRect.Min.X, lineRect.Min.Y, 0)
-		ir.renderLine(tb, line, lineRect.Min.X, lineRect.Min.Y)
+		ir.renderLine(tb, i, line, lineRect.Min.X, lineRect.Min.Y)
 		tb.Done()
 		y++
 	}
@@ -577,7 +595,7 @@ func renderedHeight(content string) int {
 }
 
 // renderLine writes a line into a TextBuilder (helper for itemRenderer)
-func (ir *itemRenderer) renderLine(tb *render.TextBuilder, line *parser.GraphRowLine, x, y int) {
+func (ir *itemRenderer) renderLine(tb *render.TextBuilder, lineIndex int, line *parser.GraphRowLine, x, y int) {
 	currentX := 0
 	write := func(content string) {
 		tb.Write(content)
@@ -591,10 +609,18 @@ func (ir *itemRenderer) renderLine(tb *render.TextBuilder, line *parser.GraphRow
 	// Only highlight lines with the Highlightable flag
 	lineIsHighlightable := line.Flags&parser.Highlightable == parser.Highlightable
 
-	// Render gutter (no tracer support for now)
-	for _, segment := range line.Gutter.Segments {
+	// Render gutter, optionally dimming/rewriting cells via the lane tracer.
+	tracer := ir.renderer.tracer
+	for col, segment := range line.Gutter.Segments {
 		style := segment.Style.Inherit(ir.renderer.textStyle)
-		writeStyled(segment.Text, style)
+		text := segment.Text
+		if tracer != nil {
+			text = tracer.UpdateGutterText(ir.rowIndex, lineIndex, col, text)
+			if !tracer.IsGutterInLane(ir.rowIndex, lineIndex, col) {
+				style = style.Faint(true).Inherit(ir.renderer.dimmedStyle)
+			}
+		}
+		writeStyled(text, style)
 	}
 
 	// Add checkbox and operation content before ChangeID
