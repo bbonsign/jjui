@@ -76,6 +76,11 @@ type RevisionsToggleSelect struct{}
 
 func (RevisionsToggleSelect) isIntent() {}
 
+//jjui:bind scope=revisions action=tracer_toggle
+type TracerToggle struct{}
+
+func (TracerToggle) isIntent() {}
+
 //jjui:bind scope=revisions.quick_search action=clear
 type RevisionsQuickSearchClear struct{}
 
