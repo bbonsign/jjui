@@ -15,6 +15,8 @@ const (
 	OperationIdPlaceholder  = "$operation_id"
 	RevsetPlaceholder       = "$revset"
 	PreviewWidthPlaceholder = "$preview_width"
+	FromPlaceholder         = "$from"
+	ToPlaceholder           = "$to"
 
 	// CheckedFilesPlaceholder user checked file names, separated by `\t` tab.
 	// tab is a lot less common than spaces on filenames
