@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/idursun/jjui/internal/config"
 	"github.com/idursun/jjui/internal/jj"
 	"github.com/idursun/jjui/internal/jj/source"
 	"github.com/idursun/jjui/internal/ui/actions"
@@ -101,6 +102,13 @@ func (o *Operation) HandleIntent(intent intents.Intent) (tea.Cmd, bool) {
 	case intents.Cancel:
 		return common.Close, true
 	case intents.Apply:
+		if custom := config.Current.Preview.DiffRangeCommand; len(custom) > 0 {
+			args := jj.TemplatedArgs(custom, map[string]string{
+				jj.FromPlaceholder: o.fromTargetArg(),
+				jj.ToPlaceholder:   o.toTargetArg(),
+			})
+			return tea.Sequence(common.Close, o.context.RunInteractiveCommand(args, nil)), true
+		}
 		command := func() tea.Msg {
 			args := jj.DiffRange(o.fromTargetArg(), o.toTargetArg())
 			if output, err := o.context.RunCommandImmediate(args); err != nil {

@@ -252,6 +252,7 @@ type PreviewConfig struct {
 	EvologCommand            []string `toml:"evolog_command"`
 	OplogCommand             []string `toml:"oplog_command"`
 	FileCommand              []string `toml:"file_command"`
+	DiffRangeCommand         []string `toml:"diff_range_command"`
 	ShowAtStart              bool     `toml:"show_at_start"`
 	Position                 string   `toml:"position"`
 	WidthPercentage          float64  `toml:"width_percentage"`
