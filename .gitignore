@@ -40,3 +40,6 @@ result-*
 .direnv
 
 .cache/
+
+# Amp orb portals
+.amp/portals/*
