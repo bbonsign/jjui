@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Run on every activation, including when a snapshot skips setup. Preserve
+# existing remote configuration; fetching and integrating upstream are opt-in.
+if ! git -C "$repo_root" remote get-url upstream >/dev/null 2>&1; then
+  git -C "$repo_root" remote add upstream https://github.com/idursun/jjui.git
+fi
