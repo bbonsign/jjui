@@ -55,12 +55,15 @@ func TestParseRowPrefixesReadsOptionalMetadataAndLegacyFormat(t *testing.T) {
 		prefix                      string
 		bookmarks, local, workspace bool
 		root, empty                 bool
+		parents                     []string
 	}{
-		{"_PREFIX:change_PREFIX:commit_PREFIX:true_PREFIX:false_PREFIX:true_PREFIX:false_PREFIX:true", true, false, true, false, true},
-		{"_PREFIX:zzzz_PREFIX:000000_PREFIX:true_PREFIX:true", false, false, false, true, true},
-		{"_PREFIX:change_PREFIX:commit_PREFIX:true_PREFIX:false_PREFIX:true", true, false, true, false, false},
-		{"_PREFIX:zzzz_PREFIX:000000_PREFIX:true", false, false, false, true, false},
-		{"_PREFIX:change_PREFIX:commit", false, false, false, false, false},
+		{"_PREFIX:change_PREFIX:commit_PREFIX:true_PREFIX:false_PREFIX:true_PREFIX:false_PREFIX:true_PREFIX:parent1,parent2", true, false, true, false, true, []string{"parent1", "parent2"}},
+		{"_PREFIX:zzzz_PREFIX:000000_PREFIX:false_PREFIX:false_PREFIX:false_PREFIX:true_PREFIX:true_PREFIX:", false, false, false, true, true, nil},
+		{"_PREFIX:change_PREFIX:commit_PREFIX:true_PREFIX:false_PREFIX:true_PREFIX:false_PREFIX:true", true, false, true, false, true, nil},
+		{"_PREFIX:zzzz_PREFIX:000000_PREFIX:true_PREFIX:true", false, false, false, true, true, nil},
+		{"_PREFIX:change_PREFIX:commit_PREFIX:true_PREFIX:false_PREFIX:true", true, false, true, false, false, nil},
+		{"_PREFIX:zzzz_PREFIX:000000_PREFIX:true", false, false, false, true, false, nil},
+		{"_PREFIX:change_PREFIX:commit", false, false, false, false, false, nil},
 	} {
 		line := NewGraphRowLine([]*screen.Segment{{Text: "@ " + tc.prefix}})
 		index, commit := line.ParseRowPrefixes()
@@ -70,5 +73,6 @@ func TestParseRowPrefixesReadsOptionalMetadataAndLegacyFormat(t *testing.T) {
 		if commit.HasBookmarks != tc.bookmarks || commit.HasLocalBookmarks != tc.local || commit.HasWorkspace != tc.workspace || commit.IsRoot() != (tc.root || commit.ChangeId == jj.RootChangeId) || commit.IsEmpty != tc.empty {
 			t.Fatalf("metadata = %+v", commit)
 		}
+		assert.Equal(t, tc.parents, commit.Parents)
 	}
 }
